@@ -109,37 +109,17 @@ def build_args(quality, tmp_dir, url):
 
 
 def download_video(url, tmp_dir, fmt, quality):
+    # yt-dlp 2026+: only web-based clients support cookies.
+    # android/ios silently drop cookies -> only images available.
+    # Use web client + deno (solves n-challenge) for all downloads.
     cookie_args = ["--cookies", COOKIES_FILE] if HAS_COOKIES else []
     deno_args = ["--js-runtimes", "deno", "--remote-components", "ejs:github"]
     pl_flag = playlist_flag(url)
     base = build_args(quality, tmp_dir, url)
 
     strategies = [
-        # android: supports cookies + exposes DASH (137/248 for 1080p)
         {
-            "label": "cookie + android",
-            "cmd": (
-                ["yt-dlp"] + cookie_args
-                + ["--format", fmt] + base + pl_flag
-                + ["--extractor-args", "youtube:player_client=android"]
-                + [url]
-            ),
-            "needs_cookie": True,
-        },
-        # android_vr: also supports cookies + DASH formats
-        {
-            "label": "cookie + android_vr",
-            "cmd": (
-                ["yt-dlp"] + cookie_args
-                + ["--format", fmt] + base + pl_flag
-                + ["--extractor-args", "youtube:player_client=android_vr"]
-                + [url]
-            ),
-            "needs_cookie": True,
-        },
-        # web + deno: solves JS challenge, exposes DASH
-        {
-            "label": "cookie + web + deno",
+            "label": "web + deno + cookies",
             "cmd": (
                 ["yt-dlp"] + cookie_args
                 + ["--format", fmt] + base + pl_flag
@@ -148,25 +128,41 @@ def download_video(url, tmp_dir, fmt, quality):
             ),
             "needs_cookie": True,
         },
-        # tv_embedded: no cookie restriction, exposes DASH
         {
-            "label": "cookie + tv_embedded",
+            "label": "web_embedded + deno + cookies",
             "cmd": (
                 ["yt-dlp"] + cookie_args
                 + ["--format", fmt] + base + pl_flag
-                + ["--extractor-args", "youtube:player_client=tv_embedded"]
-                + [url]
+                + ["--extractor-args", "youtube:player_client=web_embedded"]
+                + deno_args + [url]
             ),
             "needs_cookie": True,
         },
-        # no-cookie android fallback
         {
-            "label": "no-cookie + android",
+            "label": "default + deno + cookies",
+            "cmd": (
+                ["yt-dlp"] + cookie_args
+                + ["--format", fmt] + base + pl_flag
+                + deno_args + [url]
+            ),
+            "needs_cookie": True,
+        },
+        {
+            "label": "web + deno (no cookies)",
             "cmd": (
                 ["yt-dlp"]
                 + ["--format", fmt] + base + pl_flag
-                + ["--extractor-args", "youtube:player_client=android"]
-                + [url]
+                + ["--extractor-args", "youtube:player_client=web"]
+                + deno_args + [url]
+            ),
+            "needs_cookie": False,
+        },
+        {
+            "label": "default + deno (no cookies)",
+            "cmd": (
+                ["yt-dlp"]
+                + ["--format", fmt] + base + pl_flag
+                + deno_args + [url]
             ),
             "needs_cookie": False,
         },
@@ -188,7 +184,6 @@ def download_video(url, tmp_dir, fmt, quality):
         time.sleep(3)
 
     return False
-
 
 def get_video_height(filepath):
     try:
@@ -510,4 +505,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                                       
