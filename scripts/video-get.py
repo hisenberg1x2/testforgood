@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import sys
 import subprocess
@@ -6,13 +8,20 @@ import re
 import urllib.parse
 import random
 import shutil
-import time
 from pathlib import Path
 
-RANDOM_WORDS = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "theta", "kappa", "lambda", "sigma", "omega", "nova", "star", "moon", "sun", "sky", "cloud", "river", "ocean", "mountain"]
+# ==========================================
+# ثابت‌ها
+# ==========================================
+RANDOM_WORDS = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "theta",
+                "kappa", "lambda", "sigma", "omega", "nova", "star", "moon",
+                "sun", "sky", "cloud", "river", "ocean", "mountain"]
 SPLIT_MB = 45
 SPLIT_BYTES = SPLIT_MB * 1024 * 1024
 
+# ==========================================
+# توابع کمکی
+# ==========================================
 def sanitize_name(name):
     return re.sub(r'-+', '-', name.replace(' ', '-').replace('　', '-'))
 
@@ -37,6 +46,9 @@ def normalize_youtube_url(url):
         return f"https://www.youtube.com/watch?v={vid}"
     return url
 
+# ==========================================
+# فرمت و آرگومان‌های yt-dlp
+# ==========================================
 def get_format(quality):
     formats = {
         "audio": "bestaudio/bestaudio*/best",
@@ -52,16 +64,20 @@ def get_format(quality):
     return formats.get(quality, formats["best"])
 
 def get_common_args(quality, tmp_dir, cookies_file):
+    """آرگومان‌های yt-dlp با Deno و remote components (حل n-challenge)"""
     base = [
         "--cookies", cookies_file,
         "--write-thumbnail", "--convert-thumbnails", "jpg",
         "--no-cache-dir", "--output", f"{tmp_dir}/%(title)s.%(ext)s",
-        "--no-part", "--no-playlist", "--retries", "5",
-        "--fragment-retries", "5", "--no-check-certificates",
+        "--no-part", "--no-playlist", "--retries", "10",
+        "--fragment-retries", "10", "--no-check-certificates",
         "--concurrent-fragments", "8", "--buffer-size", "16K",
         "--http-chunk-size", "10M", "--progress", "--newline",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "--extractor-args", "youtube:player_client=web"
+        "--extractor-args", "youtube:player_client=web,android,android_vr",
+        "--js-runtimes", "deno",
+        "--remote-components", "ejs:github",
+        "--compat-options", "no-keep-subs"
     ]
     if quality == "audio":
         return ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"] + base
@@ -69,9 +85,10 @@ def get_common_args(quality, tmp_dir, cookies_file):
         return ["--merge-output-format", "mp4"] + base
 
 def download_video(url, tmp_dir, fmt, quality, cookies_file):
+    """اجرای yt-dlp با کوکی و Deno"""
     common = get_common_args(quality, tmp_dir, cookies_file)
     cmd = ["yt-dlp", "--format", fmt] + common + [url]
-    print(f"Downloading with cookies: {' '.join(cmd[:5])}... (full command hidden)")
+    print(f"Downloading with cookies + Deno: {' '.join(cmd[:5])}...")
     try:
         result = subprocess.run(cmd, check=False)
         return result.returncode == 0
@@ -82,13 +99,17 @@ def download_video(url, tmp_dir, fmt, quality, cookies_file):
 def get_video_height(filepath):
     try:
         result = subprocess.run(
-            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=height', '-of', 'csv=p=0', filepath],
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=height', '-of', 'csv=p=0', filepath],
             capture_output=True, text=True
         )
         return int(result.stdout.strip())
     except:
         return None
 
+# ==========================================
+# ساخت README (بدون تغییر)
+# ==========================================
 def create_readme(folder_path, filename, url, quality, parts_info, has_password, is_split):
     readme = f"# {filename}\n\n"
     if os.path.exists(f"{folder_path}/thumbnail.jpg"):
@@ -125,6 +146,9 @@ def create_readme(folder_path, filename, url, quality, parts_info, has_password,
     with open(f"{folder_path}/README.md", 'w', encoding='utf-8') as f:
         f.write(readme)
 
+# ==========================================
+# پردازش ویدیو (تقسیم، رمز، README)
+# ==========================================
 def process_video(url, quality, password, backup_dir, repo_owner, repo_name, branch, url_index, cookies_file):
     url = normalize_youtube_url(url)
     print(f"Processing URL {url_index}: {url}")
@@ -138,7 +162,7 @@ def process_video(url, quality, password, backup_dir, repo_owner, repo_name, bra
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return None
 
-    # Check actual quality if needed
+    # بررسی کیفیت واقعی
     if quality not in ["best", "audio"]:
         for f in Path(tmp_dir).glob("*.mp4"):
             h = get_video_height(str(f))
@@ -148,6 +172,7 @@ def process_video(url, quality, password, backup_dir, repo_owner, repo_name, bra
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 return None
 
+    # پاک کردن فایل‌های .part
     for p in Path(tmp_dir).glob("*.part"):
         p.unlink()
 
@@ -174,9 +199,11 @@ def process_video(url, quality, password, backup_dir, repo_owner, repo_name, bra
         if size > SPLIT_BYTES:
             archive_base = f"{folder_path}/{final_folder}"
             if password:
-                subprocess.run(["7z", "a", "-tzip", f"-v{SPLIT_MB}m", f"-p{password}", "-mx=0", f"{archive_base}.zip", str(filepath)])
+                subprocess.run(["7z", "a", "-tzip", f"-v{SPLIT_MB}m", f"-p{password}", "-mx=0",
+                                f"{archive_base}.zip", str(filepath)])
             else:
-                subprocess.run(["zip", "-0", "-s", f"{SPLIT_MB}m", f"{archive_base}.zip", str(filepath)])
+                subprocess.run(["zip", "-0", "-s", f"{SPLIT_MB}m",
+                                f"{archive_base}.zip", str(filepath)])
 
             parts = sorted(Path(folder_path).glob("*.z*"))
             total_size = sum(p.stat().st_size for p in parts)
@@ -213,16 +240,23 @@ def process_video(url, quality, password, backup_dir, repo_owner, repo_name, bra
     shutil.rmtree(tmp_dir, ignore_errors=True)
     return video_info
 
+# ==========================================
+# زیرنویس (با Deno)
+# ==========================================
 def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, branch, cookies_file):
     subtitle_dir = f"{folder_path}/subtitle"
     os.makedirs(subtitle_dir, exist_ok=True)
     out_tmpl = f"{subtitle_dir}/%(title)s"
 
     cmd_all = [
-        "yt-dlp", "--cookies", cookies_file, "--write-sub", "--sub-langs", "fa,en",
-        "--sub-format", "vtt/srt/best", "--convert-subs", "vtt", "--skip-download",
-        "--no-playlist", "--no-check-certificates", "--output", out_tmpl,
-        "--extractor-args", "youtube:player_client=web", url
+        "yt-dlp", "--cookies", cookies_file,
+        "--write-sub", "--sub-langs", "fa,en",
+        "--sub-format", "vtt/srt/best", "--convert-subs", "vtt",
+        "--skip-download", "--no-playlist", "--no-check-certificates",
+        "--output", out_tmpl,
+        "--extractor-args", "youtube:player_client=web,android,android_vr",
+        "--js-runtimes", "deno", "--remote-components", "ejs:github",
+        url
     ]
     subprocess.run(cmd_all, check=False)
 
@@ -230,10 +264,14 @@ def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, bra
     fa_count = len(list(Path(subtitle_dir).glob("*.fa.vtt")) + list(Path(subtitle_dir).glob("*.fa.srt")))
     if en_count == 0 or fa_count == 0:
         cmd_auto = [
-            "yt-dlp", "--cookies", cookies_file, "--write-auto-sub", "--sub-langs", "en,fa",
-            "--sub-format", "vtt/srt/best", "--convert-subs", "vtt", "--skip-download",
-            "--no-playlist", "--no-check-certificates", "--output", out_tmpl,
-            "--extractor-args", "youtube:player_client=web", url
+            "yt-dlp", "--cookies", cookies_file,
+            "--write-auto-sub", "--sub-langs", "en,fa",
+            "--sub-format", "vtt/srt/best", "--convert-subs", "vtt",
+            "--skip-download", "--no-playlist", "--no-check-certificates",
+            "--output", out_tmpl,
+            "--extractor-args", "youtube:player_client=web,android,android_vr",
+            "--js-runtimes", "deno", "--remote-components", "ejs:github",
+            url
         ]
         subprocess.run(cmd_auto, check=False)
 
@@ -250,16 +288,19 @@ def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, bra
     sub_link = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{branch}/videos/{folder_enc}/subtitle.zip"
     readme_path = f"{folder_path}/README.md"
     if os.path.exists(readme_path):
-        with open(readme_path, 'r') as f:
+        with open(readme_path, 'r', encoding='utf-8') as f:
             content = f.read()
         sub_section = f"\n---\n\n## Subtitles\n\n| # | File | Link |\n|---|------|------|\n| 1 | `subtitle.zip` | [Download]({sub_link}) |\n\n> Contains all available subtitle languages.\n"
-        if "## Download Link" in content:
-            content = content.replace("## Download Link", sub_section + "\n## Download Link")
+        if "## Download Links" in content:
+            content = content.replace("## Download Links", sub_section + "\n## Download Links")
         else:
             content += sub_section
-        with open(readme_path, 'w') as f:
+        with open(readme_path, 'w', encoding='utf-8') as f:
             f.write(content)
 
+# ==========================================
+# تابع اصلی
+# ==========================================
 def main():
     urls = os.environ.get('YT_URLS', '').split()
     quality = os.environ.get('YT_QUALITY', 'best')
@@ -268,13 +309,12 @@ def main():
     repo_owner = os.environ.get('REPO_OWNER_ENV', '')
     repo_name = os.environ.get('REPO_NAME_ENV', '')
     branch = os.environ.get('BRANCH_ENV', '')
-    cookies_str = os.environ.get('YT_COOKIES', '')   # از secret دریافت می‌شود
+    cookies_str = os.environ.get('YT_COOKIES', '')
 
     if not cookies_str:
         print("ERROR: YT_COOKIES environment variable is empty. Please set it in GitHub Secrets.")
         sys.exit(1)
 
-    # ذخیره کوکی در فایل موقت (فرمت Netscape)
     cookies_file = "/tmp/youtube_cookies.txt"
     with open(cookies_file, 'w') as f:
         f.write(cookies_str)
@@ -294,7 +334,6 @@ def main():
             folder_path = f"{backup_dir}/{info['folder']}"
             download_subtitles(url, folder_path, info['folder'], repo_owner, repo_name, branch, cookies_file)
 
-    # پاک کردن فایل کوکی
     os.remove(cookies_file)
 
     with open('/tmp/backup_dir_path.txt', 'w') as f:
