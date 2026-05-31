@@ -70,82 +70,107 @@ def get_format(quality: str) -> str:
     return formats.get(quality, formats["best"])
 
 
-# ── ساخت آرگومان‌های پایه yt-dlp ────────────────────────────────────
-
-def base_args(quality: str, tmp_dir: str) -> list:
-    """آرگومان‌های مشترک بین تمام حالت‌های دانلود"""
-    args = [
-        "--no-cache-dir",
-        "--output", f"{tmp_dir}/%(title)s.%(ext)s",
-        "--no-part",
-        "--no-playlist",
-        "--retries", "10",
-        "--fragment-retries", "10",
-        "--no-check-certificates",
-        "--concurrent-fragments", "4",
-        "--buffer-size", "16K",
-        "--http-chunk-size", "10M",
-        "--progress", "--newline",
-        "--write-thumbnail", "--convert-thumbnails", "jpg",
-        "--add-header", "Accept-Language:en-US,en;q=0.9",
-        "--user-agent",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36",
-    ]
-    if quality == "audio":
-        args += ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]
-    else:
-        args += ["--merge-output-format", "mp4"]
-    return args
-
-
 # ── دانلود اصلی ─────────────────────────────────────────────────────
+
+def is_playlist(url: str) -> bool:
+    """تشخیص playlist از ویدیوی تکی"""
+    return "playlist?list=" in url or ("/playlist" in url and "list=" in url)
+
+
+def playlist_flag(url: str) -> list:
+    """اگر playlist بود، --yes-playlist — وگرنه --no-playlist"""
+    return ["--yes-playlist"] if is_playlist(url) else ["--no-playlist"]
+
 
 def download_video(url: str, tmp_dir: str, fmt: str, quality: str) -> bool:
     """
-    استراتژی دانلود:
-      1. کوکی + web client  → مطمئن‌ترین روش، از bot-detection جلوگیری می‌کند
-      2. کوکی + android     → fallback سبک‌وزن
-      3. بدون کوکی + mweb   → آخرین تلاش (ویدیوهای عمومی)
+    استراتژی دانلود (به ترتیب اولویت):
+      1. کوکی + web + Deno JS runtime   → حل challenge، بهترین کیفیت
+      2. کوکی + android                 → بدون نیاز به JS، سریع‌تر
+      3. کوکی + tv_embedded             → fallback برای محتوای محدود
+      4. بدون کوکی + mweb + Deno        → ویدیوهای کاملاً عمومی
     """
     cookie_args = ["--cookies", COOKIES_FILE] if HAS_COOKIES else []
+    deno_args   = ["--js-runtimes", "deno", "--remote-components", "ejs:github"]
+    pl_flag     = playlist_flag(url)
+
+    # آرگومان پایه بدون --no-playlist (مدیریت می‌شه با pl_flag)
+    def bargs():
+        args = [
+            "--no-cache-dir",
+            "--output", f"{tmp_dir}/%(playlist_index)s-%(title)s.%(ext)s"
+                        if is_playlist(url) else f"{tmp_dir}/%(title)s.%(ext)s",
+            "--no-part",
+            "--retries", "10",
+            "--fragment-retries", "10",
+            "--no-check-certificates",
+            "--concurrent-fragments", "4",
+            "--buffer-size", "16K",
+            "--http-chunk-size", "10M",
+            "--progress", "--newline",
+            "--write-thumbnail", "--convert-thumbnails", "jpg",
+            "--add-header", "Accept-Language:en-US,en;q=0.9",
+            "--user-agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36",
+        ]
+        if quality == "audio":
+            args += ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]
+        else:
+            args += ["--merge-output-format", "mp4"]
+        return args
 
     strategies = [
-        # ── استراتژی ۱: کوکی + web (اصلی‌ترین روش) ──────────────────
+        # ── ۱: کوکی + web + Deno (حل JS challenge) ───────────────────
         {
-            "label": "cookie + web_client",
+            "label": "cookie + web + deno",
             "cmd": (
                 ["yt-dlp"]
                 + cookie_args
                 + ["--format", fmt]
-                + base_args(quality, tmp_dir)
+                + bargs() + pl_flag
                 + ["--extractor-args", "youtube:player_client=web"]
+                + deno_args
                 + [url]
             ),
             "requires_cookie": True,
         },
-        # ── استراتژی ۲: کوکی + android (سبک‌تر) ─────────────────────
+        # ── ۲: کوکی + android (بدون JS runtime) ──────────────────────
         {
-            "label": "cookie + android_client",
+            "label": "cookie + android",
             "cmd": (
                 ["yt-dlp"]
                 + cookie_args
                 + ["--format", fmt]
-                + base_args(quality, tmp_dir)
+                + bargs() + pl_flag
                 + ["--extractor-args", "youtube:player_client=android"]
                 + [url]
             ),
             "requires_cookie": True,
         },
-        # ── استراتژی ۳: بدون کوکی + mweb (ویدیوهای عمومی) ──────────
+        # ── ۳: کوکی + tv_embedded (برای محتوای محدود‌شده) ────────────
         {
-            "label": "no-cookie + mweb_client",
+            "label": "cookie + tv_embedded",
+            "cmd": (
+                ["yt-dlp"]
+                + cookie_args
+                + ["--format", fmt]
+                + bargs() + pl_flag
+                + ["--extractor-args", "youtube:player_client=tv_embedded"]
+                + [url]
+            ),
+            "requires_cookie": True,
+        },
+        # ── ۴: بدون کوکی + mweb + Deno (ویدیوهای عمومی) ─────────────
+        {
+            "label": "no-cookie + mweb + deno",
             "cmd": (
                 ["yt-dlp"]
                 + ["--format", fmt]
-                + base_args(quality, tmp_dir)
+                + bargs() + pl_flag
                 + ["--extractor-args", "youtube:player_client=mweb"]
+                + deno_args
                 + [url]
             ),
             "requires_cookie": False,
@@ -153,7 +178,6 @@ def download_video(url: str, tmp_dir: str, fmt: str, quality: str) -> bool:
     ]
 
     for strategy in strategies:
-        # اگر استراتژی نیاز به کوکی دارد ولی کوکی نداریم، رد کن
         if strategy["requires_cookie"] and not HAS_COOKIES:
             print(f"  ⏭  Skipping [{strategy['label']}] — no cookies available.")
             continue
@@ -168,7 +192,6 @@ def download_video(url: str, tmp_dir: str, fmt: str, quality: str) -> bool:
         except Exception as exc:
             print(f"  ⚠️  Exception in [{strategy['label']}]: {exc}")
 
-        # فاصله کوتاه بین تلاش‌ها
         time.sleep(3)
 
     return False
@@ -522,3 +545,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
