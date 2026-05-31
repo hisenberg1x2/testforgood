@@ -60,12 +60,15 @@ def normalize_youtube_url(url: str) -> str:
 # ── فرمت کیفیت ──────────────────────────────────────────────────────
 
 def get_format(quality: str) -> str:
+    # یوتیوب 1080p رو اغلب VP9/webm سرو می‌کنه نه mp4
+    # [ext=mp4] روی video stream باعث fallback به 360p می‌شه
+    # ffmpeg در مرحله merge خروجی را به mp4 تبدیل می‌کند
     formats = {
         "audio": "bestaudio/bestaudio*/best",
-        "best":  "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b",
-        "1080":  "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]",
-        "720":   "bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]",
-        "480":   "bv*[height<=480][ext=mp4]+ba[ext=m4a]/bv*[height<=480]+ba/b[height<=480]",
+        "best":  "bv*+ba/b",
+        "1080":  "bv*[height=1080]+ba/bv*[height<=1080]+ba/b",
+        "720":   "bv*[height=720]+ba/bv*[height<=720]+ba/b",
+        "480":   "bv*[height=480]+ba/bv*[height<=480]+ba/b",
     }
     return formats.get(quality, formats["best"])
 
@@ -545,4 +548,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+        
