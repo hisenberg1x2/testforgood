@@ -115,16 +115,18 @@ def download_video(url, tmp_dir, fmt, quality):
     base = build_args(quality, tmp_dir, url)
 
     strategies = [
+        # ios exposes DASH formats (137/248 for 1080p) reliably
         {
-            "label": "cookie + web + deno",
+            "label": "cookie + ios",
             "cmd": (
                 ["yt-dlp"] + cookie_args
                 + ["--format", fmt] + base + pl_flag
-                + ["--extractor-args", "youtube:player_client=web"]
-                + deno_args + [url]
+                + ["--extractor-args", "youtube:player_client=ios"]
+                + [url]
             ),
             "needs_cookie": True,
         },
+        # android also exposes DASH formats
         {
             "label": "cookie + android",
             "cmd": (
@@ -135,6 +137,18 @@ def download_video(url, tmp_dir, fmt, quality):
             ),
             "needs_cookie": True,
         },
+        # web+deno as third option
+        {
+            "label": "cookie + web + deno",
+            "cmd": (
+                ["yt-dlp"] + cookie_args
+                + ["--format", fmt] + base + pl_flag
+                + ["--extractor-args", "youtube:player_client=web"]
+                + deno_args + [url]
+            ),
+            "needs_cookie": True,
+        },
+        # tv_embedded fallback
         {
             "label": "cookie + tv_embedded",
             "cmd": (
@@ -145,13 +159,14 @@ def download_video(url, tmp_dir, fmt, quality):
             ),
             "needs_cookie": True,
         },
+        # no-cookie last resort
         {
-            "label": "no-cookie + mweb + deno",
+            "label": "no-cookie + ios",
             "cmd": (
                 ["yt-dlp"]
                 + ["--format", fmt] + base + pl_flag
-                + ["--extractor-args", "youtube:player_client=mweb"]
-                + deno_args + [url]
+                + ["--extractor-args", "youtube:player_client=ios"]
+                + [url]
             ),
             "needs_cookie": False,
         },
