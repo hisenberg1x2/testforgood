@@ -51,41 +51,29 @@ def get_format(quality):
     }
     return formats.get(quality, formats["best"])
 
-def get_common_args(quality, tmp_dir):
+def get_common_args(quality, tmp_dir, cookies_file):
     base = [
+        "--cookies", cookies_file,
         "--write-thumbnail", "--convert-thumbnails", "jpg",
         "--no-cache-dir", "--output", f"{tmp_dir}/%(title)s.%(ext)s",
         "--no-part", "--no-playlist", "--retries", "5",
         "--fragment-retries", "5", "--no-check-certificates",
         "--concurrent-fragments", "8", "--buffer-size", "16K",
-        "--http-chunk-size", "10M", "--progress", "--newline"
+        "--http-chunk-size", "10M", "--progress", "--newline",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "--extractor-args", "youtube:player_client=web"
     ]
     if quality == "audio":
         return ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"] + base
-    elif quality == "best":
-        return ["--merge-output-format", "mp4"] + base
     else:
         return ["--merge-output-format", "mp4"] + base
 
-def download_video(method, url, tmp_dir, fmt, quality):
-    common = get_common_args(quality, tmp_dir)
-    proxy = ["--proxy", "socks5://127.0.0.1:1080"]
-    ua_chrome = ["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"]
-    ua_android = ["--user-agent", "Mozilla/5.0 (Linux; Android 12; SM-S906N Build/QP1A.190711.020) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"]
-
-    methods = {
-        1: ["yt-dlp"] + proxy + ["--format", fmt] + common + ["--extractor-args", "youtube:player_client=web", "--js-runtimes", "deno", "--remote-components", "ejs:github"] + ua_chrome + ["--add-header", "Accept-Language:en-US,en;q=0.9", url],
-        2: ["yt-dlp"] + proxy + ["--format", fmt] + common + ["--extractor-args", "youtube:player_client=web", "--js-runtimes", "deno", "--remote-components", "ejs:npm"] + ua_chrome + ["--add-header", "Accept-Language:en-US,en;q=0.9", url],
-        3: ["yt-dlp"] + proxy + ["--format", fmt] + common + ["--extractor-args", "youtube:player_client=web,mweb,android_vr", "--js-runtimes", "deno", "--remote-components", "ejs:github", url],
-        4: ["yt-dlp"] + proxy + ["--format", fmt] + common + ["--extractor-args", "youtube:player_client=mweb", url],
-        5: ["yt-dlp"] + proxy + ["--format", fmt] + common + ["--extractor-args", "youtube:player_client=android_vr", url],
-        6: ["yt-dlp", "--format", fmt] + common + ["--extractor-args", "youtube:player_client=web", "--js-runtimes", "deno", "--remote-components", "ejs:github", url],
-        7: ["yt-dlp", "--format", fmt] + common + ["--extractor-args", "youtube:player_client=mweb", url],
-        8: ["yt-dlp"] + proxy + ["--format", fmt] + common + ["--extractor-args", "youtube:player_client=android"] + ua_android + [url],
-    }
-    print(f"Trying download method {method}...")
+def download_video(url, tmp_dir, fmt, quality, cookies_file):
+    common = get_common_args(quality, tmp_dir, cookies_file)
+    cmd = ["yt-dlp", "--format", fmt] + common + [url]
+    print(f"Downloading with cookies: {' '.join(cmd[:5])}... (full command hidden)")
     try:
-        result = subprocess.run(methods[method], check=False)
+        result = subprocess.run(cmd, check=False)
         return result.returncode == 0
     except Exception as e:
         print(f"Error: {e}")
@@ -137,35 +125,28 @@ def create_readme(folder_path, filename, url, quality, parts_info, has_password,
     with open(f"{folder_path}/README.md", 'w', encoding='utf-8') as f:
         f.write(readme)
 
-def process_video(url, quality, password, backup_dir, repo_owner, repo_name, branch, url_index):
+def process_video(url, quality, password, backup_dir, repo_owner, repo_name, branch, url_index, cookies_file):
     url = normalize_youtube_url(url)
     print(f"Processing URL {url_index}: {url}")
     tmp_dir = f"tmp_downloads_{url_index}"
     os.makedirs(tmp_dir, exist_ok=True)
     fmt = get_format(quality)
 
-    success = False
-    for method in range(1, 9):
-        if download_video(method, url, tmp_dir, fmt, quality):
-            quality_ok = True
-            if quality not in ["best", "audio"]:
-                for f in Path(tmp_dir).glob("*.mp4"):
-                    h = get_video_height(str(f))
-                    if h and h < int(quality) - 150:
-                        print(f"Method {method} delivered {h}p instead of {quality}p — rejecting...")
-                        quality_ok = False
-                        f.unlink()
-            if quality_ok:
-                success = True
-                print(f"Download successful with method {method}!")
-                break
-        print(f"Method {method} failed, waiting 3 seconds...")
-        time.sleep(3)
-
+    success = download_video(url, tmp_dir, fmt, quality, cookies_file)
     if not success:
-        print(f"All download methods failed for URL: {url}")
+        print(f"Download failed for URL: {url}")
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return None
+
+    # Check actual quality if needed
+    if quality not in ["best", "audio"]:
+        for f in Path(tmp_dir).glob("*.mp4"):
+            h = get_video_height(str(f))
+            target = int(quality)
+            if h and h < target - 150:
+                print(f"Downloaded {h}p instead of {quality}p — rejecting")
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                return None
 
     for p in Path(tmp_dir).glob("*.part"):
         p.unlink()
@@ -232,42 +213,29 @@ def process_video(url, quality, password, backup_dir, repo_owner, repo_name, bra
     shutil.rmtree(tmp_dir, ignore_errors=True)
     return video_info
 
-def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, branch):
+def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, branch, cookies_file):
     subtitle_dir = f"{folder_path}/subtitle"
     os.makedirs(subtitle_dir, exist_ok=True)
     out_tmpl = f"{subtitle_dir}/%(title)s"
 
-    def sub_download(mode):
-        sub_flags = {
-            "all": ["--write-sub", "--sub-langs", "fa,en"],
-            "auto-both": ["--write-auto-sub", "--sub-langs", "en,fa"],
-        }
-        flags = sub_flags.get(mode, sub_flags["all"])
-        common = ["--sub-format", "vtt/srt/best", "--convert-subs", "vtt", "--skip-download", "--no-playlist", "--no-check-certificates", "--output", out_tmpl]
-        proxy = ["--proxy", "socks5://127.0.0.1:1080"]
+    cmd_all = [
+        "yt-dlp", "--cookies", cookies_file, "--write-sub", "--sub-langs", "fa,en",
+        "--sub-format", "vtt/srt/best", "--convert-subs", "vtt", "--skip-download",
+        "--no-playlist", "--no-check-certificates", "--output", out_tmpl,
+        "--extractor-args", "youtube:player_client=web", url
+    ]
+    subprocess.run(cmd_all, check=False)
 
-        for method in range(1, 9):
-            methods = {
-                1: ["yt-dlp"] + proxy + ["--extractor-args", "youtube:player_client=web", "--js-runtimes", "deno", "--remote-components", "ejs:github"] + flags + common + [url],
-                2: ["yt-dlp"] + proxy + ["--extractor-args", "youtube:player_client=web", "--js-runtimes", "deno", "--remote-components", "ejs:npm"] + flags + common + [url],
-                3: ["yt-dlp"] + proxy + ["--extractor-args", "youtube:player_client=web,mweb,android_vr", "--js-runtimes", "deno", "--remote-components", "ejs:github"] + flags + common + [url],
-                4: ["yt-dlp"] + proxy + ["--extractor-args", "youtube:player_client=mweb"] + flags + common + [url],
-                5: ["yt-dlp"] + proxy + ["--extractor-args", "youtube:player_client=android_vr"] + flags + common + [url],
-                6: ["yt-dlp", "--extractor-args", "youtube:player_client=web", "--js-runtimes", "deno", "--remote-components", "ejs:github"] + flags + common + [url],
-                7: ["yt-dlp", "--extractor-args", "youtube:player_client=mweb"] + flags + common + [url],
-                8: ["yt-dlp"] + proxy + ["--extractor-args", "youtube:player_client=android"] + flags + common + [url],
-            }
-            subprocess.run(methods[method], check=False)
-            subs = list(Path(subtitle_dir).glob("*.vtt")) + list(Path(subtitle_dir).glob("*.srt"))
-            if subs:
-                return True
-        return False
-
-    sub_download("all")
     en_count = len(list(Path(subtitle_dir).glob("*.en.vtt")) + list(Path(subtitle_dir).glob("*.en.srt")))
     fa_count = len(list(Path(subtitle_dir).glob("*.fa.vtt")) + list(Path(subtitle_dir).glob("*.fa.srt")))
     if en_count == 0 or fa_count == 0:
-        sub_download("auto-both")
+        cmd_auto = [
+            "yt-dlp", "--cookies", cookies_file, "--write-auto-sub", "--sub-langs", "en,fa",
+            "--sub-format", "vtt/srt/best", "--convert-subs", "vtt", "--skip-download",
+            "--no-playlist", "--no-check-certificates", "--output", out_tmpl,
+            "--extractor-args", "youtube:player_client=web", url
+        ]
+        subprocess.run(cmd_auto, check=False)
 
     subs = list(Path(subtitle_dir).iterdir())
     if not subs:
@@ -300,6 +268,16 @@ def main():
     repo_owner = os.environ.get('REPO_OWNER_ENV', '')
     repo_name = os.environ.get('REPO_NAME_ENV', '')
     branch = os.environ.get('BRANCH_ENV', '')
+    cookies_str = os.environ.get('YT_COOKIES', '')   # از secret دریافت می‌شود
+
+    if not cookies_str:
+        print("ERROR: YT_COOKIES environment variable is empty. Please set it in GitHub Secrets.")
+        sys.exit(1)
+
+    # ذخیره کوکی در فایل موقت (فرمت Netscape)
+    cookies_file = "/tmp/youtube_cookies.txt"
+    with open(cookies_file, 'w') as f:
+        f.write(cookies_str)
 
     backup_dir = f"/tmp/video_backup_{os.getpid()}"
     os.makedirs(backup_dir, exist_ok=True)
@@ -307,14 +285,17 @@ def main():
 
     all_info = []
     for i, url in enumerate(urls, 1):
-        info = process_video(url, quality, password, backup_dir, repo_owner, repo_name, branch, i)
+        info = process_video(url, quality, password, backup_dir, repo_owner, repo_name, branch, i, cookies_file)
         if info:
             all_info.extend([(v, url) for v in info])
 
     if download_subs:
         for info, url in all_info:
             folder_path = f"{backup_dir}/{info['folder']}"
-            download_subtitles(url, folder_path, info['folder'], repo_owner, repo_name, branch)
+            download_subtitles(url, folder_path, info['folder'], repo_owner, repo_name, branch, cookies_file)
+
+    # پاک کردن فایل کوکی
+    os.remove(cookies_file)
 
     with open('/tmp/backup_dir_path.txt', 'w') as f:
         f.write(backup_dir)
