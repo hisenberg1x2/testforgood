@@ -66,6 +66,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y python3-pip ffmpeg zip p7zip-full curl jq bc unzip
+          # Deno برای حل YouTube JS challenge لازمه
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
           pip3 install --upgrade yt-dlp
 
       # ──────────────────────────────────────────────────────────────
