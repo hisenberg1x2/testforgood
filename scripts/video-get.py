@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-video-get.py — بهینه‌شده با احراز هویت کوکی
-دانلود یک‌بار با بهترین کیفیت، بدون تلاش‌های تکراری اتلاف‌زا
-"""
+# -*- coding: utf-8 -*-
 import os
 import sys
 import subprocess
@@ -21,26 +18,23 @@ RANDOM_WORDS = [
 SPLIT_MB = 45
 SPLIT_BYTES = SPLIT_MB * 1024 * 1024
 
-# ── کوکی ────────────────────────────────────────────────────────────
 COOKIES_FILE = os.environ.get("COOKIES_FILE", "/tmp/yt_cookies.txt")
 HAS_COOKIES = os.path.isfile(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 10
 
 
-# ── ابزارهای کمکی ───────────────────────────────────────────────────
-
-def sanitize_name(name: str) -> str:
+def sanitize_name(name):
     return re.sub(r"-+", "-", name.replace(" ", "-").replace("\u3000", "-"))
 
 
-def urlencode(s: str) -> str:
+def urlencode(s):
     return urllib.parse.quote(s, safe="")
 
 
-def get_random_word() -> str:
+def get_random_word():
     return f"{random.choice(RANDOM_WORDS)}_{random.randint(0, 9999)}"
 
 
-def get_unique_folder(base_path: str, backup_dir: str, name: str) -> str:
+def get_unique_folder(base_path, backup_dir, name):
     if not os.path.isdir(f"{base_path}/{name}") and not os.path.isdir(f"{backup_dir}/{name}"):
         return name
     suffix = get_random_word()
@@ -49,7 +43,7 @@ def get_unique_folder(base_path: str, backup_dir: str, name: str) -> str:
     return f"{name}_{suffix}"
 
 
-def normalize_youtube_url(url: str) -> str:
+def normalize_youtube_url(url):
     match = re.search(r"youtu\.be/([a-zA-Z0-9_-]+)", url)
     if match:
         vid = match.group(1).split("?")[0]
@@ -57,19 +51,17 @@ def normalize_youtube_url(url: str) -> str:
     return url
 
 
-# ── فرمت کیفیت ──────────────────────────────────────────────────────
-
-def get_format(quality: str) -> str:
-    # فرمت‌های یوتیوب:
-    #   137 = 1080p mp4,  248 = 1080p webm (VP9)
-    #   136 = 720p mp4,   247 = 720p webm
-    #   135 = 480p mp4,   244 = 480p webm
-    #   140 = audio m4a,  251 = audio opus
-    # bestaudio بدون محدودیت ext، ffmpeg مرج می‌کند به mp4
+def get_format(quality):
+    # YouTube format IDs:
+    #   137 = 1080p mp4 video,  248 = 1080p webm (VP9)
+    #   136 = 720p  mp4 video,  247 = 720p  webm
+    #   135 = 480p  mp4 video,  244 = 480p  webm
+    #   140 = audio m4a,        251 = audio opus
+    # We avoid [ext=mp4] on video stream because YouTube serves
+    # 1080p+ mostly as VP9/webm. ffmpeg merges to mp4 at the end.
     formats = {
         "audio": "bestaudio/bestaudio*/best",
         "best":  "bv*+ba/b",
-        # اول ID مستقیم، بعد selector عمومی با vbr بالا
         "1080":  "137+140/248+251/137+bestaudio/248+bestaudio/bestvideo[height=1080]+bestaudio/bestvideo[height<=1080][height>720]+bestaudio/b",
         "720":   "136+140/247+251/136+bestaudio/247+bestaudio/bestvideo[height=720]+bestaudio/bestvideo[height<=720][height>480]+bestaudio/b",
         "480":   "135+140/244+251/135+bestaudio/244+bestaudio/bestvideo[height=480]+bestaudio/bestvideo[height<=480]+bestaudio/b",
@@ -77,144 +69,117 @@ def get_format(quality: str) -> str:
     return formats.get(quality, formats["best"])
 
 
-# ── دانلود اصلی ─────────────────────────────────────────────────────
-
-def is_playlist(url: str) -> bool:
-    """تشخیص playlist از ویدیوی تکی"""
+def is_playlist(url):
     return "playlist?list=" in url or ("/playlist" in url and "list=" in url)
 
 
-def playlist_flag(url: str) -> list:
-    """اگر playlist بود، --yes-playlist — وگرنه --no-playlist"""
+def playlist_flag(url):
     return ["--yes-playlist"] if is_playlist(url) else ["--no-playlist"]
 
 
-def download_video(url: str, tmp_dir: str, fmt: str, quality: str) -> bool:
-    """
-    استراتژی دانلود (به ترتیب اولویت):
-      1. کوکی + web + Deno JS runtime   → حل challenge، بهترین کیفیت
-      2. کوکی + android                 → بدون نیاز به JS، سریع‌تر
-      3. کوکی + tv_embedded             → fallback برای محتوای محدود
-      4. بدون کوکی + mweb + Deno        → ویدیوهای کاملاً عمومی
-    """
-    cookie_args = ["--cookies", COOKIES_FILE] if HAS_COOKIES else []
-    deno_args   = ["--js-runtimes", "deno", "--remote-components", "ejs:github"]
-    pl_flag     = playlist_flag(url)
+def build_args(quality, tmp_dir, url):
+    out_tmpl = (
+        f"{tmp_dir}/%(playlist_index)s-%(title)s.%(ext)s"
+        if is_playlist(url)
+        else f"{tmp_dir}/%(title)s.%(ext)s"
+    )
+    args = [
+        "--no-cache-dir",
+        "--output", out_tmpl,
+        "--no-part",
+        "--retries", "10",
+        "--fragment-retries", "10",
+        "--no-check-certificates",
+        "--concurrent-fragments", "4",
+        "--buffer-size", "16K",
+        "--http-chunk-size", "10M",
+        "--progress", "--newline",
+        "--write-thumbnail", "--convert-thumbnails", "jpg",
+        "--add-header", "Accept-Language:en-US,en;q=0.9",
+        "--user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36",
+    ]
+    if quality == "audio":
+        args += ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]
+    else:
+        args += ["--merge-output-format", "mp4", "--format-sort", "res,vbr,abr"]
+    return args
 
-    # آرگومان پایه بدون --no-playlist (مدیریت می‌شه با pl_flag)
-    def bargs():
-        args = [
-            "--no-cache-dir",
-            "--output", f"{tmp_dir}/%(playlist_index)s-%(title)s.%(ext)s"
-                        if is_playlist(url) else f"{tmp_dir}/%(title)s.%(ext)s",
-            "--no-part",
-            "--retries", "10",
-            "--fragment-retries", "10",
-            "--no-check-certificates",
-            "--concurrent-fragments", "4",
-            "--buffer-size", "16K",
-            "--http-chunk-size", "10M",
-            "--progress", "--newline",
-            "--write-thumbnail", "--convert-thumbnails", "jpg",
-            "--add-header", "Accept-Language:en-US,en;q=0.9",
-            "--user-agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36",
-        ]
-        if quality == "audio":
-            args += ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]
-        else:
-            args += ["--merge-output-format", "mp4"]
-            # اطمینان از اینکه height اولویت داره در انتخاب فرمت
-            args += ["--format-sort", "res,vbr,abr"]
-        return args
+
+def download_video(url, tmp_dir, fmt, quality):
+    cookie_args = ["--cookies", COOKIES_FILE] if HAS_COOKIES else []
+    deno_args = ["--js-runtimes", "deno", "--remote-components", "ejs:github"]
+    pl_flag = playlist_flag(url)
+    base = build_args(quality, tmp_dir, url)
 
     strategies = [
-        # ── ۱: کوکی + web + Deno (حل JS challenge) ───────────────────
         {
             "label": "cookie + web + deno",
             "cmd": (
-                ["yt-dlp"]
-                + cookie_args
-                + ["--format", fmt]
-                + bargs() + pl_flag
+                ["yt-dlp"] + cookie_args
+                + ["--format", fmt] + base + pl_flag
                 + ["--extractor-args", "youtube:player_client=web"]
-                + deno_args
-                + [url]
+                + deno_args + [url]
             ),
-            "requires_cookie": True,
+            "needs_cookie": True,
         },
-        # ── ۲: کوکی + android (بدون JS runtime) ──────────────────────
         {
             "label": "cookie + android",
             "cmd": (
-                ["yt-dlp"]
-                + cookie_args
-                + ["--format", fmt]
-                + bargs() + pl_flag
+                ["yt-dlp"] + cookie_args
+                + ["--format", fmt] + base + pl_flag
                 + ["--extractor-args", "youtube:player_client=android"]
                 + [url]
             ),
-            "requires_cookie": True,
+            "needs_cookie": True,
         },
-        # ── ۳: کوکی + tv_embedded (برای محتوای محدود‌شده) ────────────
         {
             "label": "cookie + tv_embedded",
             "cmd": (
-                ["yt-dlp"]
-                + cookie_args
-                + ["--format", fmt]
-                + bargs() + pl_flag
+                ["yt-dlp"] + cookie_args
+                + ["--format", fmt] + base + pl_flag
                 + ["--extractor-args", "youtube:player_client=tv_embedded"]
                 + [url]
             ),
-            "requires_cookie": True,
+            "needs_cookie": True,
         },
-        # ── ۴: بدون کوکی + mweb + Deno (ویدیوهای عمومی) ─────────────
         {
             "label": "no-cookie + mweb + deno",
             "cmd": (
                 ["yt-dlp"]
-                + ["--format", fmt]
-                + bargs() + pl_flag
+                + ["--format", fmt] + base + pl_flag
                 + ["--extractor-args", "youtube:player_client=mweb"]
-                + deno_args
-                + [url]
+                + deno_args + [url]
             ),
-            "requires_cookie": False,
+            "needs_cookie": False,
         },
     ]
 
-    for strategy in strategies:
-        if strategy["requires_cookie"] and not HAS_COOKIES:
-            print(f"  ⏭  Skipping [{strategy['label']}] — no cookies available.")
+    for s in strategies:
+        if s["needs_cookie"] and not HAS_COOKIES:
+            print(f"  skip [{s['label']}] - no cookies")
             continue
-
-        print(f"\n▶  Trying strategy: {strategy['label']}")
+        print(f"\n>> Trying: {s['label']}")
         try:
-            result = subprocess.run(strategy["cmd"], check=False)
+            result = subprocess.run(s["cmd"], check=False)
             if result.returncode == 0:
-                print(f"  ✅ Success with [{strategy['label']}]")
+                print(f"  OK: {s['label']}")
                 return True
-            print(f"  ❌ Failed with [{strategy['label']}] (exit {result.returncode})")
+            print(f"  FAIL: {s['label']} (exit {result.returncode})")
         except Exception as exc:
-            print(f"  ⚠️  Exception in [{strategy['label']}]: {exc}")
-
+            print(f"  ERROR: {s['label']}: {exc}")
         time.sleep(3)
 
     return False
 
 
-# ── بررسی کیفیت واقعی ───────────────────────────────────────────────
-
-def get_video_height(filepath: str) -> int | None:
+def get_video_height(filepath):
     try:
         result = subprocess.run(
-            [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=height", "-of", "csv=p=0", filepath,
-            ],
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=height", "-of", "csv=p=0", filepath],
             capture_output=True, text=True,
         )
         return int(result.stdout.strip())
@@ -222,12 +187,7 @@ def get_video_height(filepath: str) -> int | None:
         return None
 
 
-# ── README ──────────────────────────────────────────────────────────
-
-def create_readme(
-    folder_path, filename, url, quality,
-    parts_info, has_password, is_split,
-):
+def create_readme(folder_path, filename, url, quality, parts_info, has_password, is_split):
     readme = f"# {filename}\n\n"
     if os.path.exists(f"{folder_path}/thumbnail.jpg"):
         readme += (
@@ -249,7 +209,7 @@ def create_readme(
     if is_split:
         readme += (
             f"> Download **all parts**, then open `{parts_info['main_zip']}` "
-            "— the other parts are found automatically.\n\n"
+            "- the other parts are found automatically.\n\n"
         )
     readme += "| # | File | Link |\n|---|------|------|\n"
     for i, link in enumerate(parts_info["links"], 1):
@@ -257,10 +217,10 @@ def create_readme(
     readme += "\n---\n\n## How to Extract\n\n"
     if has_password:
         readme += "| OS | Steps |\n|----|-------|\n"
-        readme += f"| **Windows** | Right-click `{parts_info['main_zip']}` → *Extract Here* → enter password |\n"
-        readme += "| **Mac** | Open with Keka → enter password |\n"
-        readme += f"| **Linux** | `unzip {parts_info['main_zip']}` → enter password |\n"
-        readme += f"| **Android** | Use ZArchiver → tap `{parts_info['main_zip']}` → enter password |\n"
+        readme += f"| **Windows** | Right-click `{parts_info['main_zip']}` -> Extract Here -> enter password |\n"
+        readme += "| **Mac** | Open with Keka -> enter password |\n"
+        readme += f"| **Linux** | `unzip {parts_info['main_zip']}` -> enter password |\n"
+        readme += f"| **Android** | Use ZArchiver -> tap `{parts_info['main_zip']}` -> enter password |\n"
     elif is_split:
         readme += "| OS | Steps |\n|----|-------|\n"
         readme += f"| **Windows** | Double-click `{parts_info['main_zip']}` |\n"
@@ -268,22 +228,17 @@ def create_readme(
         readme += f"| **Linux** | `unzip {parts_info['main_zip']}` |\n"
         readme += f"| **Android** | Tap `{parts_info['main_zip']}` in ZArchiver |\n"
     else:
-        readme += "Ready to use — no extraction needed!\n"
+        readme += "Ready to use - no extraction needed!\n"
     readme += "\n---\n\n*This tool created by [avasam.ir](https://avasam.ir)*\n"
     with open(f"{folder_path}/README.md", "w", encoding="utf-8") as fh:
         fh.write(readme)
 
 
-# ── پردازش یک ویدیو ─────────────────────────────────────────────────
-
-def process_video(
-    url, quality, password,
-    backup_dir, repo_owner, repo_name, branch, url_index,
-):
+def process_video(url, quality, password, backup_dir, repo_owner, repo_name, branch, url_index):
     url = normalize_youtube_url(url)
     print(f"\n{'='*60}")
     print(f"Processing URL {url_index}: {url}")
-    print(f"Quality: {quality}  |  Cookies: {'✅ available' if HAS_COOKIES else '⚠️  not set'}")
+    print(f"Quality: {quality} | Cookies: {'YES' if HAS_COOKIES else 'NO'}")
     print("=" * 60)
 
     tmp_dir = f"tmp_downloads_{url_index}"
@@ -291,18 +246,16 @@ def process_video(
     fmt = get_format(quality)
 
     if not download_video(url, tmp_dir, fmt, quality):
-        print(f"\n❌ All strategies failed for: {url}")
+        print(f"\nFAIL: all strategies failed for: {url}")
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return None
 
-    # بررسی کیفیت واقعی (فقط برای کیفیت‌های عددی)
     if quality not in ("best", "audio"):
         for f in Path(tmp_dir).glob("*.mp4"):
             h = get_video_height(str(f))
-            if h and h < int(quality) - 150:
-                print(f"⚠️  Got {h}p instead of {quality}p — keeping best available.")
+            if h:
+                print(f"  Video height: {h}p")
 
-    # پاک‌کردن فایل‌های ناقص
     for p in Path(tmp_dir).glob("*.part"):
         p.unlink()
 
@@ -318,7 +271,6 @@ def process_video(
         folder_path = f"{backup_dir}/{final_folder}"
         os.makedirs(folder_path, exist_ok=True)
 
-        # کپی thumbnail
         thumbs = list(Path(tmp_dir).glob("*.jpg"))
         if thumbs:
             shutil.copy(thumbs[0], f"{folder_path}/thumbnail.jpg")
@@ -412,8 +364,6 @@ def process_video(
     return video_info
 
 
-# ── دانلود زیرنویس ──────────────────────────────────────────────────
-
 def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, branch):
     subtitle_dir = f"{folder_path}/subtitle"
     os.makedirs(subtitle_dir, exist_ok=True)
@@ -431,8 +381,7 @@ def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, bra
     def try_sub(sub_flags):
         for client in ["web", "mweb", "android"]:
             cmd = (
-                ["yt-dlp"]
-                + cookie_args
+                ["yt-dlp"] + cookie_args
                 + ["--extractor-args", f"youtube:player_client={client}"]
                 + sub_flags + common + [url]
             )
@@ -445,7 +394,6 @@ def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, bra
                 return True
         return False
 
-    # اول زیرنویس رسمی، سپس خودکار
     try_sub(["--write-sub", "--sub-langs", "fa,en"])
     en_ok = bool(
         list(Path(subtitle_dir).glob("*.en.vtt"))
@@ -492,8 +440,6 @@ def download_subtitles(url, folder_path, folder_name, repo_owner, repo_name, bra
             fh.write(content)
 
 
-# ── main ─────────────────────────────────────────────────────────────
-
 def main():
     urls = os.environ.get("YT_URLS", "").split()
     quality = os.environ.get("YT_QUALITY", "best")
@@ -504,15 +450,11 @@ def main():
     branch = os.environ.get("BRANCH_ENV", "")
 
     if not urls:
-        print("❌ No URLs provided.")
+        print("ERROR: No URLs provided.")
         sys.exit(1)
 
     if not HAS_COOKIES:
-        print(
-            "\n⚠️  WARNING: YT_COOKIES secret is not set or empty.\n"
-            "   Age-restricted or private videos will fail.\n"
-            "   Add your cookies.txt content to the YT_COOKIES secret.\n"
-        )
+        print("WARNING: YT_COOKIES secret is not set. Age-restricted videos will fail.")
 
     backup_dir = f"/tmp/video_backup_{os.getpid()}"
     os.makedirs(backup_dir, exist_ok=True)
@@ -535,8 +477,22 @@ def main():
                 repo_owner, repo_name, branch,
             )
 
-    # ذخیره متغیرهای محیطی برای مراحل بعدی workflow
     with open("/tmp/backup_dir_path.txt", "w") as fh:
         fh.write(backup_dir)
     with open("/tmp/video_info.txt", "w") as fh:
-     
+        for info, _ in all_info:
+            fh.write(f"{info['original']}|{info['folder']}\n")
+    with open("/tmp/yt_urls.txt", "w") as fh:
+        for url in urls:
+            fh.write(url + "\n")
+    with open("/tmp/env_vars.txt", "w") as fh:
+        fh.write(f"REPO_OWNER_ENV={repo_owner}\n")
+        fh.write(f"REPO_NAME_ENV={repo_name}\n")
+        fh.write(f"BRANCH_ENV={branch}\n")
+
+    print(f"\nDone: processed {len(all_info)} video(s).")
+
+
+if __name__ == "__main__":
+    main()
+    
