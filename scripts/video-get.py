@@ -47,37 +47,51 @@ def normalize_youtube_url(url):
     return url
 
 # ==========================================
-# فرمت و آرگومان‌های yt-dlp
+# فرمت و آرگومان‌های yt-dlp (اصلاح شده برای کیفیت 1080p)
 # ==========================================
 def get_format(quality):
-    formats = {
-        "audio": "bestaudio/bestaudio*/best",
-        "best": "bv*+ba/b",
-        "2160": "bestvideo[height<=2160]+bestaudio/bestvideo[height<=2160]*+bestaudio*/bestvideo+bestaudio/best",
-        "4k": "bestvideo[height<=2160]+bestaudio/bestvideo[height<=2160]*+bestaudio*/bestvideo+bestaudio/best",
-        "1440": "bestvideo[height<=1440]+bestaudio/bestvideo[height<=1440]*+bestaudio*/bestvideo+bestaudio/best",
-        "2k": "bestvideo[height<=1440]+bestaudio/bestvideo[height<=1440]*+bestaudio*/bestvideo+bestaudio/best",
-        "1080": "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1080]*+bestaudio*/bestvideo+bestaudio/best",
-        "720": "bestvideo[height<=720]+bestaudio/bestvideo[height<=720]*+bestaudio*/bestvideo+bestaudio/best",
-        "480": "bestvideo[height<=480]+bestaudio/bestvideo[height<=480]*+bestaudio*/bestvideo+bestaudio/best",
-    }
-    return formats.get(quality, formats["best"])
+    """
+    بازگرداندن رشته فرمت yt-dlp با اولویت کیفیت بالا
+    """
+    if quality == "audio":
+        return "bestaudio/bestaudio*/best"
+    elif quality == "best":
+        return "bv*+ba/b"
+    elif quality == "1080":
+        # روش اجباری: ابتدا ویدیو 1080p + صدا، سپس هر ویدیو 1080p بدون صدا، سپس best[height<=1080]
+        return "bestvideo[height=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=1080]+bestaudio/best[height<=1080]/best"
+    elif quality == "720":
+        return "bestvideo[height=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=720]+bestaudio/best[height<=720]/best"
+    elif quality == "480":
+        return "bestvideo[height=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height=480]+bestaudio/best[height<=480]/best"
+    elif quality == "2160" or quality == "4k":
+        return "bestvideo[height<=2160]+bestaudio/bestvideo[height<=2160]*+bestaudio*/bestvideo+bestaudio/best"
+    elif quality == "1440" or quality == "2k":
+        return "bestvideo[height<=1440]+bestaudio/bestvideo[height<=1440]*+bestaudio*/bestvideo+bestaudio/best"
+    else:
+        # هر کیفیت دیگر به صورت پویا
+        return f"bestvideo[height<={quality}]+bestaudio/bestvideo[height<={quality}]*+bestaudio*/best"
 
 def get_common_args(quality, tmp_dir, cookies_file):
-    """آرگومان‌های yt-dlp با Deno و remote components (حل n-challenge)"""
+    """
+    آرگومان‌های yt-dlp با Deno و remote components و اولویت‌بندی کیفیت
+    """
     base = [
         "--cookies", cookies_file,
         "--write-thumbnail", "--convert-thumbnails", "jpg",
         "--no-cache-dir", "--output", f"{tmp_dir}/%(title)s.%(ext)s",
-        "--no-part", "--no-playlist", "--retries", "10",
-        "--fragment-retries", "10", "--no-check-certificates",
+        "--no-part", "--no-playlist", "--retries", "15",
+        "--fragment-retries", "15", "--no-check-certificates",
         "--concurrent-fragments", "8", "--buffer-size", "16K",
         "--http-chunk-size", "10M", "--progress", "--newline",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "--extractor-args", "youtube:player_client=web,android,android_vr",
         "--js-runtimes", "deno",
         "--remote-components", "ejs:github",
-        "--compat-options", "no-keep-subs"
+        "--compat-options", "no-keep-subs",
+        # اولویت‌بندی کیفیت: ابتدا 1080p، سپس 720p، سپس 480p، سپس هر چیزی
+        "--format-sort", "res:1080,res:720,res:480,codec:av1:6,codec:h264:4",
+        "--format-sort-force"
     ]
     if quality == "audio":
         return ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"] + base
@@ -85,26 +99,36 @@ def get_common_args(quality, tmp_dir, cookies_file):
         return ["--merge-output-format", "mp4"] + base
 
 def download_video(url, tmp_dir, fmt, quality, cookies_file):
-    """اجرای yt-dlp با کوکی و Deno"""
+    """
+    اجرای yt-dlp با نمایش خروجی کامل برای اشکال‌یابی
+    """
     common = get_common_args(quality, tmp_dir, cookies_file)
     cmd = ["yt-dlp", "--format", fmt] + common + [url]
-    print(f"Downloading with cookies + Deno: {' '.join(cmd[:5])}...")
+    print(f"Download command: yt-dlp --format {fmt} ... (cookies and deno enabled)")
+    print(f"Full command (partial): {' '.join(cmd[:10])}...")
     try:
-        result = subprocess.run(cmd, check=False)
+        # اجرا با خروجی实时 برای دیدن خطاها
+        result = subprocess.run(cmd, check=False, capture_output=False)
         return result.returncode == 0
     except Exception as e:
         print(f"Error: {e}")
         return False
 
 def get_video_height(filepath):
+    """
+    استخراج ارتفاع ویدیو با ffprobe
+    """
     try:
         result = subprocess.run(
             ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
              '-show_entries', 'stream=height', '-of', 'csv=p=0', filepath],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=30
         )
-        return int(result.stdout.strip())
-    except:
+        height = int(result.stdout.strip())
+        print(f"Detected video height: {height}p")
+        return height
+    except Exception as e:
+        print(f"Could not detect height: {e}")
         return None
 
 # ==========================================
@@ -147,14 +171,16 @@ def create_readme(folder_path, filename, url, quality, parts_info, has_password,
         f.write(readme)
 
 # ==========================================
-# پردازش ویدیو (تقسیم، رمز، README)
+# پردازش ویدیو (تقسیم، رمز، README) با بررسی کیفیت
 # ==========================================
 def process_video(url, quality, password, backup_dir, repo_owner, repo_name, branch, url_index, cookies_file):
     url = normalize_youtube_url(url)
-    print(f"Processing URL {url_index}: {url}")
+    print(f"\n{'='*60}\nProcessing URL {url_index}: {url}\n{'='*60}")
     tmp_dir = f"tmp_downloads_{url_index}"
     os.makedirs(tmp_dir, exist_ok=True)
     fmt = get_format(quality)
+    print(f"Requested quality: {quality}")
+    print(f"Format string: {fmt}")
 
     success = download_video(url, tmp_dir, fmt, quality, cookies_file)
     if not success:
@@ -162,15 +188,27 @@ def process_video(url, quality, password, backup_dir, repo_owner, repo_name, bra
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return None
 
-    # بررسی کیفیت واقعی
-    if quality not in ["best", "audio"]:
-        for f in Path(tmp_dir).glob("*.mp4"):
-            h = get_video_height(str(f))
-            target = int(quality)
-            if h and h < target - 150:
-                print(f"Downloaded {h}p instead of {quality}p — rejecting")
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                return None
+    # بررسی کیفیت واقعی فایل دانلود شده
+    downloaded_files = list(Path(tmp_dir).glob("*.mp4")) + list(Path(tmp_dir).glob("*.mkv")) + list(Path(tmp_dir).glob("*.webm"))
+    if not downloaded_files:
+        print("No video file found after download")
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None
+
+    for filepath in downloaded_files:
+        h = get_video_height(str(filepath))
+        if h:
+            print(f"Downloaded video height: {h}p")
+            if quality not in ["best", "audio"]:
+                target = int(quality)
+                if h < target - 150:  # تلورانس 150 پیکسل
+                    print(f"ERROR: Downloaded {h}p instead of {quality}p — rejecting this video")
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    return None
+                else:
+                    print(f"Quality check passed: {h}p >= {target}p")
+        else:
+            print("Could not verify height, but proceeding anyway")
 
     # پاک کردن فایل‌های .part
     for p in Path(tmp_dir).glob("*.part"):
@@ -349,7 +387,7 @@ def main():
         f.write(f"REPO_NAME_ENV={repo_name}\n")
         f.write(f"BRANCH_ENV={branch}\n")
 
-    print(f"Processed {len(all_info)} videos")
+    print(f"\n✅ Processed {len(all_info)} videos successfully")
 
 if __name__ == "__main__":
     main()
