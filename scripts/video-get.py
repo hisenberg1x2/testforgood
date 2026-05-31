@@ -115,18 +115,7 @@ def download_video(url, tmp_dir, fmt, quality):
     base = build_args(quality, tmp_dir, url)
 
     strategies = [
-        # ios exposes DASH formats (137/248 for 1080p) reliably
-        {
-            "label": "cookie + ios",
-            "cmd": (
-                ["yt-dlp"] + cookie_args
-                + ["--format", fmt] + base + pl_flag
-                + ["--extractor-args", "youtube:player_client=ios"]
-                + [url]
-            ),
-            "needs_cookie": True,
-        },
-        # android also exposes DASH formats
+        # android: supports cookies + exposes DASH (137/248 for 1080p)
         {
             "label": "cookie + android",
             "cmd": (
@@ -137,7 +126,18 @@ def download_video(url, tmp_dir, fmt, quality):
             ),
             "needs_cookie": True,
         },
-        # web+deno as third option
+        # android_vr: also supports cookies + DASH formats
+        {
+            "label": "cookie + android_vr",
+            "cmd": (
+                ["yt-dlp"] + cookie_args
+                + ["--format", fmt] + base + pl_flag
+                + ["--extractor-args", "youtube:player_client=android_vr"]
+                + [url]
+            ),
+            "needs_cookie": True,
+        },
+        # web + deno: solves JS challenge, exposes DASH
         {
             "label": "cookie + web + deno",
             "cmd": (
@@ -148,7 +148,7 @@ def download_video(url, tmp_dir, fmt, quality):
             ),
             "needs_cookie": True,
         },
-        # tv_embedded fallback
+        # tv_embedded: no cookie restriction, exposes DASH
         {
             "label": "cookie + tv_embedded",
             "cmd": (
@@ -159,13 +159,13 @@ def download_video(url, tmp_dir, fmt, quality):
             ),
             "needs_cookie": True,
         },
-        # no-cookie last resort
+        # no-cookie android fallback
         {
-            "label": "no-cookie + ios",
+            "label": "no-cookie + android",
             "cmd": (
                 ["yt-dlp"]
                 + ["--format", fmt] + base + pl_flag
-                + ["--extractor-args", "youtube:player_client=ios"]
+                + ["--extractor-args", "youtube:player_client=android"]
                 + [url]
             ),
             "needs_cookie": False,
