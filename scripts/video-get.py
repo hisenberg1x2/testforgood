@@ -60,15 +60,19 @@ def normalize_youtube_url(url: str) -> str:
 # ── فرمت کیفیت ──────────────────────────────────────────────────────
 
 def get_format(quality: str) -> str:
-    # یوتیوب 1080p رو اغلب VP9/webm سرو می‌کنه نه mp4
-    # [ext=mp4] روی video stream باعث fallback به 360p می‌شه
-    # ffmpeg در مرحله merge خروجی را به mp4 تبدیل می‌کند
+    # فرمت‌های یوتیوب:
+    #   137 = 1080p mp4,  248 = 1080p webm (VP9)
+    #   136 = 720p mp4,   247 = 720p webm
+    #   135 = 480p mp4,   244 = 480p webm
+    #   140 = audio m4a,  251 = audio opus
+    # bestaudio بدون محدودیت ext، ffmpeg مرج می‌کند به mp4
     formats = {
         "audio": "bestaudio/bestaudio*/best",
         "best":  "bv*+ba/b",
-        "1080":  "bv*[height=1080]+ba/bv*[height<=1080]+ba/b",
-        "720":   "bv*[height=720]+ba/bv*[height<=720]+ba/b",
-        "480":   "bv*[height=480]+ba/bv*[height<=480]+ba/b",
+        # اول ID مستقیم، بعد selector عمومی با vbr بالا
+        "1080":  "137+140/248+251/137+bestaudio/248+bestaudio/bestvideo[height=1080]+bestaudio/bestvideo[height<=1080][height>720]+bestaudio/b",
+        "720":   "136+140/247+251/136+bestaudio/247+bestaudio/bestvideo[height=720]+bestaudio/bestvideo[height<=720][height>480]+bestaudio/b",
+        "480":   "135+140/244+251/135+bestaudio/244+bestaudio/bestvideo[height=480]+bestaudio/bestvideo[height<=480]+bestaudio/b",
     }
     return formats.get(quality, formats["best"])
 
@@ -122,6 +126,8 @@ def download_video(url: str, tmp_dir: str, fmt: str, quality: str) -> bool:
             args += ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "0"]
         else:
             args += ["--merge-output-format", "mp4"]
+            # اطمینان از اینکه height اولویت داره در انتخاب فرمت
+            args += ["--format-sort", "res,vbr,abr"]
         return args
 
     strategies = [
@@ -533,19 +539,4 @@ def main():
     with open("/tmp/backup_dir_path.txt", "w") as fh:
         fh.write(backup_dir)
     with open("/tmp/video_info.txt", "w") as fh:
-        for info, _ in all_info:
-            fh.write(f"{info['original']}|{info['folder']}\n")
-    with open("/tmp/yt_urls.txt", "w") as fh:
-        for url in urls:
-            fh.write(url + "\n")
-    with open("/tmp/env_vars.txt", "w") as fh:
-        fh.write(f"REPO_OWNER_ENV={repo_owner}\n")
-        fh.write(f"REPO_NAME_ENV={repo_name}\n")
-        fh.write(f"BRANCH_ENV={branch}\n")
-
-    print(f"\n✅ Processed {len(all_info)} video(s) successfully.")
-
-
-if __name__ == "__main__":
-    main()
-        
+     
