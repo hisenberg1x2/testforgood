@@ -19,8 +19,6 @@ on:
         type: choice
         options:
           - best
-          - 2160
-          - 1440
           - 1080
           - 720
           - 480
@@ -53,7 +51,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Configure Git for Large Files
+      - name: Configure Git
         run: |
           git config --global http.postBuffer 524288000
           git config --global http.maxRequestBuffer 100M
@@ -66,15 +64,31 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y python3-pip ffmpeg zip p7zip-full curl jq bc unzip
-          # نصب Deno (اجرای جاوااسکریپت برای حل n-challenge)
-          curl -fsSL https://deno.land/install.sh | sh
-          export DENO_INSTALL="$HOME/.deno"
-          export PATH="$DENO_INSTALL/bin:$PATH"
-          echo "$DENO_INSTALL/bin" >> $GITHUB_PATH
-          # نصب آخرین نسخه yt-dlp (بدون نیاز به [default]، چون خودش Deno را می‌شناسد)
-          pip3 install --break-system-packages --upgrade yt-dlp
+          pip3 install --upgrade yt-dlp
+
+      # ──────────────────────────────────────────────────────────────
+      # کوکی را از Repository Secret بخوان و به فایل تبدیل کن
+      # برای اضافه‌کردن کوکی:
+      #   Settings → Secrets and variables → Actions →
+      #   Repository secrets → New repository secret
+      #   Name: YT_COOKIES   |   Value: محتوای فایل cookies.txt
+      #
+      # فرمت کوکی باید Netscape/Mozilla باشد (از افزونه‌های
+      # "Get cookies.txt LOCALLY" یا "EditThisCookie" خروجی بگیرید)
+      # ──────────────────────────────────────────────────────────────
+      - name: Write Cookies File
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            echo "$YT_COOKIES" > /tmp/yt_cookies.txt
+            echo "✅ Cookies loaded from secret."
+          else
+            echo "⚠️  YT_COOKIES secret not set — will attempt download without cookies."
+            touch /tmp/yt_cookies.txt
+          fi
 
       - name: Download YouTube Video(s)
         env:
@@ -85,12 +99,8 @@ jobs:
           REPO_OWNER_ENV: ${{ github.repository_owner }}
           REPO_NAME_ENV: ${{ github.event.repository.name }}
           BRANCH_ENV: ${{ github.ref_name }}
-          YT_COOKIES: ${{ secrets.YT_COOKIES }}
-        run: |
-          # اطمینان از وجود Deno در PATH
-          export PATH="$HOME/.deno/bin:$PATH"
-          deno --version
-          python3 scripts/video-get.py
+          COOKIES_FILE: /tmp/yt_cookies.txt
+        run: python3 scripts/video-get.py
 
       - name: Incremental Commit & Push
         run: |
